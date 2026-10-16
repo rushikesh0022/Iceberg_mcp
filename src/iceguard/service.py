@@ -12,9 +12,10 @@ from iceguard.compatibility import DECISION_RANK, assess
 from iceguard.lineage import DEFAULT_MAX_DEPTH, build_edges, get_lineage
 from iceguard.models import CandidateAssessment, Decision, Lineage, ReusePlan, Table
 from iceguard.sql_analysis import (
+    AnalysisCache,
     SqlAnalysisError,
     analyze_catalog,
-    analyze_sql,
+    analyze_sql_cached,
     expand_upstream,
     identity_analysis,
 )
@@ -47,16 +48,18 @@ def search_catalog(query: str, catalog: CatalogSource) -> list[Table]:
     return [t for _, t in scored[:MAX_SEARCH_RESULTS]]
 
 
-def plan_table_reuse(proposed_sql: str, catalog: CatalogSource) -> ReusePlan:
+def plan_table_reuse(
+    proposed_sql: str, catalog: CatalogSource, cache: AnalysisCache | None = None
+) -> ReusePlan:
     """analyze_sql -> find_candidates -> assess each -> pick the best decision."""
     try:
-        proposed = analyze_sql(proposed_sql, catalog)
+        proposed = analyze_sql_cached(proposed_sql, catalog, cache)
     except SqlAnalysisError as e:
         return _needs_info(None, [str(e)])
     if not proposed.outputs:  # unsupported statement shape, e.g. UNION
         return _needs_info(proposed.target_table, proposed.limitations)
 
-    existing, errors = analyze_catalog(catalog)
+    existing, errors = analyze_catalog(catalog, cache)
     existing.pop(proposed.target_table, None)  # never compare a table with itself
     expanded_existing = {t: expand_upstream(a, existing) for t, a in existing.items()}
     expanded_proposed = expand_upstream(proposed, existing)
@@ -94,11 +97,14 @@ def plan_table_reuse(proposed_sql: str, catalog: CatalogSource) -> ReusePlan:
 
 
 def get_table_lineage(
-    table: str, catalog: CatalogSource, max_depth: int = DEFAULT_MAX_DEPTH
+    table: str,
+    catalog: CatalogSource,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    cache: AnalysisCache | None = None,
 ) -> Lineage:
     if catalog.get_table(table) is None:
         raise ValueError(f"Unknown table: {table}")
-    analyses, _ = analyze_catalog(catalog)
+    analyses, _ = analyze_catalog(catalog, cache)
     return get_lineage(table, build_edges(analyses), max_depth)
 
 

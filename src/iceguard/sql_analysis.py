@@ -14,6 +14,11 @@ Anything that cannot be resolved goes into `limitations` instead of being guesse
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+from typing import Protocol
+
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import OptimizeError, ParseError
@@ -29,6 +34,40 @@ DIALECT = "clickhouse"
 
 class SqlAnalysisError(ValueError):
     """The SQL cannot be parsed or resolved against the catalog."""
+
+
+class AnalysisCache(Protocol):
+    def get(self, key: str) -> SqlAnalysis | None: ...
+
+    def put(self, key: str, analysis: SqlAnalysis) -> None: ...
+
+
+# Part of every cache key: editing this module invalidates all cached analyses.
+_CODE_VERSION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def analysis_key(sql: str, catalog: CatalogSource) -> str:
+    """Hash of everything an analysis depends on: SQL, schemas, unique keys, analyser code."""
+    facts = [
+        sql,
+        catalog.schema_mapping(),
+        {t.name: t.unique_key for t in catalog.list_tables()},
+        _CODE_VERSION,
+    ]
+    return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
+
+
+def analyze_sql_cached(
+    sql: str, catalog: CatalogSource, cache: AnalysisCache | None
+) -> SqlAnalysis:
+    if cache is None:
+        return analyze_sql(sql, catalog)
+    key = analysis_key(sql, catalog)
+    if (hit := cache.get(key)) is not None:
+        return hit
+    analysis = analyze_sql(sql, catalog)
+    cache.put(key, analysis)
+    return analysis
 
 
 def analyze_sql(sql: str, catalog: CatalogSource) -> SqlAnalysis:
@@ -88,7 +127,12 @@ def analyze_sql(sql: str, catalog: CatalogSource) -> SqlAnalysis:
 
 def _parse_single(sql: str) -> exp.Expression:
     try:
-        statements = [s for s in sqlglot.parse(sql, read=DIALECT) if s is not None]
+        # A comment after the last ";" parses as an empty Semicolon statement.
+        statements = [
+            s
+            for s in sqlglot.parse(sql, read=DIALECT)
+            if s is not None and not isinstance(s, exp.Semicolon)
+        ]
     except ParseError as e:
         raise SqlAnalysisError(f"Cannot parse SQL: {e}") from e
     if len(statements) != 1:
@@ -293,7 +337,9 @@ def _is_many_to_one(join: exp.Join, joined: str | None, catalog: CatalogSource) 
 # --- Whole catalog and upstream expansion --------------------------------------
 
 
-def analyze_catalog(catalog: CatalogSource) -> tuple[dict[str, SqlAnalysis], list[str]]:
+def analyze_catalog(
+    catalog: CatalogSource, cache: AnalysisCache | None = None
+) -> tuple[dict[str, SqlAnalysis], list[str]]:
     """Analyse the SQL of every produced table. Return analyses by table, and errors."""
     analyses: dict[str, SqlAnalysis] = {}
     errors: list[str] = []
@@ -302,7 +348,7 @@ def analyze_catalog(catalog: CatalogSource) -> tuple[dict[str, SqlAnalysis], lis
         if sql is None:
             continue
         try:
-            analyses[table.name] = analyze_sql(sql, catalog)
+            analyses[table.name] = analyze_sql_cached(sql, catalog, cache)
         except SqlAnalysisError as e:
             errors.append(f"{table.name}: {e}")
     return analyses, errors

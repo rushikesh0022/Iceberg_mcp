@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 iceguard-mcp = "iceguard.mcp_server:main"
+iceguard-hook = "iceguard.hook:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -169,3 +169,8 @@ def test_equivalent_filters_are_written_the_same_way(
 ) -> None:
     a = analyze_sql(f"SELECT delivery_id FROM raw.deliveries WHERE {where}", catalog)
     assert a.filters == [expected]
+
+
+def test_comment_after_last_statement_is_ignored(catalog: SchemaFileCatalog) -> None:
+    a = analyze_sql("SELECT delivery_id FROM raw.deliveries;\n-- a trailing note\n", catalog)
+    assert a.grain == ["delivery_id"]

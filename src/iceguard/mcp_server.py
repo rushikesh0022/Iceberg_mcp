@@ -3,31 +3,25 @@
 This module only translates between MCP and `service`; it holds no rules.
 
 The catalog is read on every call, so edits to SQL files, the schema file or
-the database are picked up without restarting the server.
-
-Environment:
-  ICEGUARD_CATALOG  "file" (default): catalog/schema.toml
-                    "clickhouse": discover tables from a running ClickHouse
-  ICEGUARD_SCHEMA   schema file for the "file" catalog
-  ICEGUARD_CH_HOST, ICEGUARD_CH_PORT   ClickHouse HTTP address (127.0.0.1:8123)
+the database are picked up without restarting the server. Configuration is
+shared with the hook: see iceguard.runtime. Every reuse check is recorded in
+the SQLite history.
 """
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Annotated
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from iceguard import service
-from iceguard.catalog import CatalogSource, SchemaFileCatalog
+from iceguard import runtime, service
+from iceguard.catalog import CatalogSource
 from iceguard.lineage import DEFAULT_MAX_DEPTH
 from iceguard.models import Lineage, ReusePlan, Table
+from iceguard.runtime import CatalogUnavailable
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 READ_ONLY = {"read_only_hint": True, "idempotent_hint": True, "open_world_hint": False}
 
 mcp = FastMCP(
@@ -41,32 +35,11 @@ mcp = FastMCP(
 )
 
 
-def load_catalog() -> CatalogSource:
-    kind = os.environ.get("ICEGUARD_CATALOG", "file")
-    if kind == "clickhouse":
-        return _clickhouse_catalog()
-    if kind != "file":
-        raise ToolError(f"ICEGUARD_CATALOG must be 'file' or 'clickhouse', not {kind!r}.")
-
-    schema = Path(os.environ.get("ICEGUARD_SCHEMA", REPO_ROOT / "catalog" / "schema.toml"))
-    if not schema.is_file():
-        raise ToolError(f"Catalog schema file not found: {schema}")
-    return SchemaFileCatalog(schema, repo_root=schema.parent.parent)
-
-
-def _clickhouse_catalog() -> CatalogSource:
-    from clickhouse_connect.driver.exceptions import OperationalError
-
-    from iceguard.clickhouse_catalog import ClickHouseCatalog
-
-    host = os.environ.get("ICEGUARD_CH_HOST", "127.0.0.1")
-    port = int(os.environ.get("ICEGUARD_CH_PORT", "8123"))
+def _catalog() -> CatalogSource:
     try:
-        return ClickHouseCatalog(REPO_ROOT, host=host, port=port)
-    except OperationalError as e:
-        raise ToolError(
-            f"Cannot reach ClickHouse at {host}:{port}. Start it with scripts/clickhouse.sh start."
-        ) from e
+        return runtime.load_catalog()
+    except CatalogUnavailable as e:
+        raise ToolError(str(e)) from e
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -74,7 +47,7 @@ def search_catalog(
     query: Annotated[str, Field(description="Words describing the data, e.g. 'delivery delays'.")],
 ) -> list[Table]:
     """Find existing tables whose name, columns or description match the query."""
-    return service.search_catalog(query, load_catalog())
+    return service.search_catalog(query, _catalog())
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -97,7 +70,18 @@ def plan_table_reuse(
       NEW_TABLE      - the rows, grain or logic differ; the reasons say how.
       NEEDS_INFO     - IceGuard cannot decide; limitations say what is missing.
     """
-    return service.plan_table_reuse(sql, load_catalog())
+    catalog = _catalog()
+    store = runtime.open_store()
+    try:
+        plan = service.plan_table_reuse(sql, catalog, cache=store)
+        if store:
+            store.record_check(
+                sql=sql, plan=plan, source="mcp", catalog=runtime.catalog_kind(), action="reported"
+            )
+        return plan
+    finally:
+        if store:
+            store.close()
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -109,7 +93,7 @@ def get_table_lineage(
 ) -> Lineage:
     """Show which tables feed a table (upstream) and which tables read it (downstream)."""
     try:
-        return service.get_table_lineage(table, load_catalog(), max_depth)
+        return service.get_table_lineage(table, _catalog(), max_depth)
     except ValueError as e:
         raise ToolError(str(e)) from e
 

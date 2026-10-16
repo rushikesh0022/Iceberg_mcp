@@ -16,6 +16,9 @@ src/iceguard/
   lineage.py        upstream / downstream tables
   service.py        entry points the MCP server calls
   mcp_server.py     FastMCP server: search_catalog, plan_table_reuse, get_table_lineage
+  hook.py           Claude Code PreToolUse hook: checks every SQL write under pipelines/
+  store.py          SQLite: analysis cache + history of checks (.iceguard/iceguard.sqlite)
+  runtime.py        configuration shared by the MCP server and the hook
 catalog/schema.toml hand-written demo catalog (fast tests; default MCP catalog)
 catalog/contracts.toml unique keys, which ClickHouse cannot report
 clickhouse/config.xml local server config (1.5 GB memory cap, localhost only)
@@ -54,6 +57,21 @@ this folder and approve the server when asked. Then try:
 - "Find tables with delivery delays."
 - "I want a table of delivery delays per delivery, without the status filter. Check it first."
 - "What reads from analytics.fact_deliveries?"
+
+The repo's `.claude/settings.json` also registers a hook. Whenever Claude writes
+or edits a `.sql` file under `pipelines/`, IceGuard checks it first:
+
+- REUSE or EVOLVE_SCHEMA: the write is blocked, with the table to use instead.
+- NEW_TABLE or NEEDS_INFO: the write goes ahead; the reasons are passed to Claude.
+
+To create a table anyway, add `-- iceguard: allow-new-table <reason>` to the SQL.
+If IceGuard itself fails (for example ClickHouse is down), the write is allowed.
+
+Every check is recorded in `.iceguard/iceguard.sqlite`:
+
+```bash
+sqlite3 .iceguard/iceguard.sqlite "SELECT checked_at, source, file_path, decision, action FROM checks"
+```
 
 To run the server by hand (stdio): `uv run iceguard-mcp`.
 Set `ICEGUARD_SCHEMA=/path/to/schema.toml` to point it at another catalog.

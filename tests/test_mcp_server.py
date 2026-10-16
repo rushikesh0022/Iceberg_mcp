@@ -67,3 +67,11 @@ def test_missing_schema_file_is_a_tool_error(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ICEGUARD_SCHEMA", str(tmp_path / "missing.toml"))
     with pytest.raises(ToolError, match="schema file not found"):
         call("search_catalog", query="delivery")
+
+
+def test_reuse_checks_are_recorded() -> None:
+    from iceguard.runtime import open_store
+
+    call("plan_table_reuse", sql=(PROPOSED_DIR / "01_exact_duplicate.sql").read_text())
+    [record] = open_store().recent_checks()
+    assert (record.source, record.action, record.decision) == ("mcp", "reported", "REUSE")
