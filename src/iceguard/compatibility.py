@@ -45,19 +45,30 @@ DECISION_RANK = {
 class ColumnMatch:
     matched: dict[str, str] = field(default_factory=dict)  # proposed name -> candidate name
     new: list[str] = field(default_factory=list)
+    # Same formula (e.g. avg(delay)) but over different groups of rows: the values
+    # differ, so these count as new, with their own reason.
+    regrouped: dict[str, str] = field(default_factory=dict)  # proposed name -> candidate name
     conflicts: list[str] = field(default_factory=list)
 
 
 def match_columns(proposed: SqlAnalysis, existing: SqlAnalysis) -> ColumnMatch:
     by_expression = {o.expression: o.name for o in existing.outputs}
     existing_names = {o.name for o in existing.outputs}
-    same_sources = set(proposed.source_tables) == set(existing.source_tables)
+    # count(), avg(x) or a constant give the same value only when both queries
+    # group the same rows; for those, equal text alone proves nothing.
+    same_groups = (
+        set(proposed.source_tables) == set(existing.source_tables)
+        and bool(proposed.grain)
+        and _grain_expressions(proposed) == _grain_expressions(existing)
+    )
     result = ColumnMatch()
     for o in proposed.outputs:
-        # count() or a constant reads no column, so equal text proves nothing
-        # unless both queries read the same tables.
-        if o.expression in by_expression and (o.source_columns or same_sources):
+        row_dependent = not o.source_columns or _is_aggregate(o.expression)
+        if o.expression in by_expression and (same_groups or not row_dependent):
             result.matched[o.name] = by_expression[o.expression]
+        elif o.expression in by_expression:
+            result.regrouped[o.name] = by_expression[o.expression]
+            result.new.append(o.name)
         elif o.name in existing_names:
             result.conflicts.append(o.name)
         else:
@@ -74,7 +85,11 @@ def check_columns(proposed: SqlAnalysis, existing: SqlAnalysis) -> CheckResult:
             if p_name == e_name
             else f"{p_name}: same calculation as {e_name} (renamed)"
         )
-    reasons += [f"{name}: new column" for name in m.new]
+    reasons += [
+        f"{p_name}: same formula as {e_name}, but over different groups of rows"
+        for p_name, e_name in m.regrouped.items()
+    ]
+    reasons += [f"{name}: new column" for name in m.new if name not in m.regrouped]
     reasons += [
         f"{name}: same name, different calculation in {existing.target_table}"
         for name in m.conflicts
@@ -123,12 +138,21 @@ def check_logic(proposed: SqlAnalysis, existing: SqlAnalysis) -> CheckResult:
     reasons: list[str] = []
     name = existing.target_table
 
-    for f in sorted(set(existing.filters) - set(proposed.filters)):
+    missing = sorted(set(existing.filters) - set(proposed.filters))
+    for f in missing:
         statuses.append(CheckStatus.FAIL)
-        reasons.append(f"{name} keeps only rows where {f}; the proposal needs the other rows too.")
+        reasons.append(
+            f"{name} keeps only rows where {f}. The proposal does not apply this filter, "
+            f"so it needs rows that {name} does not contain."
+        )
 
     by_expression = {o.expression: o.name for o in existing.outputs}
     for f in sorted(set(proposed.filters) - set(existing.filters)):
+        if missing:
+            # The candidate already lacks rows the proposal needs, so suggesting
+            # "read it WHERE ..." would be misleading.
+            reasons.append(f"The proposal filters on {f} instead.")
+            continue
         rewritten = None if f.startswith("HAVING ") else _rewrite_on_outputs(f, by_expression)
         if rewritten is None:
             statuses.append(CheckStatus.FAIL)
@@ -215,6 +239,11 @@ def assess(
 def _grain_expressions(analysis: SqlAnalysis) -> set[str]:
     by_name = {o.name: o.expression for o in analysis.outputs}
     return {by_name[g] for g in analysis.grain}
+
+
+def _is_aggregate(expression: str) -> bool:
+    node = sqlglot.parse_one(expression, read=DIALECT)
+    return any(not isinstance(a.parent, exp.Window) for a in node.find_all(exp.AggFunc))
 
 
 def _rewrite_on_outputs(predicate: str, by_expression: dict[str, str]) -> str | None:

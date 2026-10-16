@@ -87,3 +87,13 @@ def test_lineage_depth_limit(catalog: SchemaFileCatalog) -> None:
 def test_unknown_table_raises(catalog: SchemaFileCatalog) -> None:
     with pytest.raises(ValueError, match="Unknown table"):
         get_table_lineage("analytics.nope", catalog)
+
+
+def test_in_filter_reuses_fact_deliveries(catalog: SchemaFileCatalog) -> None:
+    plan = plan_table_reuse(
+        "SELECT delivery_id, toDate(actual_time) AS delivery_date "
+        "FROM raw.deliveries WHERE status IN ('DELIVERED')",
+        catalog,
+    )
+    assert plan.decision == Decision.REUSE
+    assert plan.recommended_table == "analytics.fact_deliveries"

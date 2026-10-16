@@ -115,3 +115,25 @@ def _checks(*statuses: CheckStatus) -> list[CheckResult]:
 )
 def test_decide(statuses, new, evolvable, expected) -> None:
     assert decide(_checks(*statuses), new, evolvable) == expected
+
+
+def test_aggregate_over_different_groups_is_not_a_match(expand, analyses) -> None:
+    merchant_daily = expand_upstream(analyses["analytics.agg_merchant_daily_delays"], analyses)
+    proposed = expand(
+        "SELECT dasher_id, avg(delay_minutes) AS avg_delay_minutes "
+        "FROM analytics.fact_deliveries GROUP BY dasher_id"
+    )
+    result = check_columns(proposed, merchant_daily)
+    assert (
+        "avg_delay_minutes: same formula as avg_delay_minutes, but over different groups of rows"
+        in result.reasons
+    )
+    assert not any("different calculation" in r for r in result.reasons)
+
+
+def test_conflicting_filter_gives_no_misleading_suggestion(expand, fact) -> None:
+    proposed = expand("SELECT delivery_id FROM raw.deliveries WHERE status = 'CANCELLED'")
+    result = check_logic(proposed, fact)
+    assert result.status == CheckStatus.FAIL
+    assert "The proposal filters on 'CANCELLED' = raw.deliveries.status instead." in result.reasons
+    assert not any("WHERE" in r for r in result.reasons)

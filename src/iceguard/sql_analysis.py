@@ -150,8 +150,8 @@ class _Normalizer:
                 return exp.column(n.name, table=table, db=db or None)
             return n
 
-        # Two passes: operands must be unaliased before their order is compared.
-        return node.copy().transform(unalias).transform(_order_eq)
+        # Two passes: operands must be unaliased before they are canonicalized.
+        return node.copy().transform(unalias).transform(_canonical)
 
     def sql(self, node: exp.Expression) -> str:
         return self.rewrite(node).sql(DIALECT)
@@ -160,10 +160,27 @@ class _Normalizer:
         return sorted({c.sql(DIALECT) for c in self.rewrite(node).find_all(exp.Column)})
 
 
-def _order_eq(n: exp.Expression) -> exp.Expression:
-    """Write `a = b` with operands in a fixed order, so `x = 1` and `1 = x` match."""
-    if isinstance(n, exp.EQ) and n.this.sql(DIALECT) > n.expression.sql(DIALECT):
-        return exp.EQ(this=n.expression, expression=n.this)
+def _canonical(n: exp.Expression) -> exp.Expression:
+    """Write equivalent predicates the same way, so their text can be compared.
+
+    x IN ('A')       -> x = 'A'
+    x IN ('B', 'A')  -> x IN ('A', 'B')
+    NOT x IN ('A')   -> x <> 'A'
+    1 = x            -> 1 = x and x = 1 both become one fixed operand order
+    """
+    if isinstance(n, exp.Not):
+        inner = _canonical(n.this.copy())
+        if isinstance(inner, exp.EQ):
+            return _canonical(exp.NEQ(this=inner.this, expression=inner.expression))
+        return n
+    if isinstance(n, exp.In) and n.expressions and not n.args.get("query"):
+        values = sorted(n.expressions, key=lambda v: v.sql(DIALECT))
+        if len(values) == 1:
+            n = exp.EQ(this=n.this, expression=values[0])
+        else:
+            return exp.In(this=n.this, expressions=values)
+    if isinstance(n, (exp.EQ, exp.NEQ)) and n.this.sql(DIALECT) > n.expression.sql(DIALECT):
+        return type(n)(this=n.expression, expression=n.this)
     return n
 
 
@@ -329,7 +346,7 @@ def expand_upstream(
             return sqlglot.parse_one(replacement.expression, read=DIALECT)
 
         node = sqlglot.parse_one(sql, read=DIALECT)
-        return node.transform(visit).transform(_order_eq)
+        return node.transform(visit).transform(_canonical)
 
     def rewrite(sql: str) -> str:
         if sql.startswith("HAVING "):

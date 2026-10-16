@@ -152,3 +152,20 @@ def test_union_is_reported_as_unsupported(catalog: SchemaFileCatalog) -> None:
 def test_invalid_sql_raises(catalog: SchemaFileCatalog, sql: str) -> None:
     with pytest.raises(SqlAnalysisError):
         analyze_sql(sql, catalog)
+
+
+@pytest.mark.parametrize(
+    ("where", "expected"),
+    [
+        ("status IN ('DELIVERED')", DELIVERED),
+        ("'DELIVERED' = status", DELIVERED),
+        ("status IN ('B', 'A')", "raw.deliveries.status IN ('A', 'B')"),
+        ("status NOT IN ('X')", "'X' <> raw.deliveries.status"),
+        ("status != 'X'", "'X' <> raw.deliveries.status"),
+    ],
+)
+def test_equivalent_filters_are_written_the_same_way(
+    catalog: SchemaFileCatalog, where: str, expected: str
+) -> None:
+    a = analyze_sql(f"SELECT delivery_id FROM raw.deliveries WHERE {where}", catalog)
+    assert a.filters == [expected]
