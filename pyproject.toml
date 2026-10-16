@@ -8,9 +8,13 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "fastmcp>=4.1.0",
     "pydantic>=2.14.1",
     "sqlglot>=30.23.0",
 ]
+
+[project.scripts]
+iceguard-mcp = "iceguard.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "iceguard": {
+      "command": "uv",
+      "args": ["run", "iceguard-mcp"]
+    }
+  }
+}
