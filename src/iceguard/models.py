@@ -26,6 +26,10 @@ class Table(BaseModel):
     # so it comes from the schema file or a contract, not from the engine.
     unique_key: list[str] = Field(default_factory=list)
     produced_by: str | None = None  # path to the SQL file, relative to the repo root
+    # Reported by the database; None when the catalog is a hand-written file.
+    engine: str | None = None
+    total_rows: int | None = None
+    total_bytes: int | None = None
 
     def column_names(self) -> list[str]:
         return [c.name for c in self.columns]

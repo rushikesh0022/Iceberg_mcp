@@ -1,0 +1,26 @@
+# Row contracts: facts that ClickHouse cannot report about itself.
+#
+# ClickHouse knows each table's columns, sort key and partitions, but not which
+# columns identify one row (ORDER BY is not a uniqueness guarantee). IceGuard
+# needs that to know a table's grain, so it is declared here.
+
+[tables."raw.deliveries"]
+unique_key = ["delivery_id"]
+
+[tables."raw.weather_hourly"]
+unique_key = ["zone_id", "hour"]
+
+[tables."raw.merchants"]
+unique_key = ["merchant_id"]
+
+[tables."raw.promo_clicks"]
+unique_key = ["click_id"]
+
+[tables."analytics.fact_deliveries"]
+unique_key = ["delivery_id"]
+
+[tables."analytics.agg_merchant_daily_delays"]
+unique_key = ["merchant_id", "delivery_date"]
+
+[tables."analytics.zombie_promo_clicks_2024"]
+unique_key = ["promo_id", "click_date"]

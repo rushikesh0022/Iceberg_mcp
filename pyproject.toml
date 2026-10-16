@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "clickhouse-connect>=1.11.0",
     "fastmcp>=4.1.0",
     "pydantic>=2.14.1",
     "sqlglot>=30.23.0",
@@ -28,6 +29,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: needs the local ClickHouse server (skipped when it is not running)"]
 
 [tool.ruff]
 line-length = 100

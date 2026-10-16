@@ -2,9 +2,14 @@
 
 This module only translates between MCP and `service`; it holds no rules.
 
-The catalog is read on every call, so edits to SQL files or the schema file
-are picked up without restarting the server. Set ICEGUARD_SCHEMA to use a
-schema file other than the repo's catalog/schema.toml.
+The catalog is read on every call, so edits to SQL files, the schema file or
+the database are picked up without restarting the server.
+
+Environment:
+  ICEGUARD_CATALOG  "file" (default): catalog/schema.toml
+                    "clickhouse": discover tables from a running ClickHouse
+  ICEGUARD_SCHEMA   schema file for the "file" catalog
+  ICEGUARD_CH_HOST, ICEGUARD_CH_PORT   ClickHouse HTTP address (127.0.0.1:8123)
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from iceguard import service
-from iceguard.catalog import SchemaFileCatalog
+from iceguard.catalog import CatalogSource, SchemaFileCatalog
 from iceguard.lineage import DEFAULT_MAX_DEPTH
 from iceguard.models import Lineage, ReusePlan, Table
 
@@ -36,11 +41,32 @@ mcp = FastMCP(
 )
 
 
-def load_catalog() -> SchemaFileCatalog:
+def load_catalog() -> CatalogSource:
+    kind = os.environ.get("ICEGUARD_CATALOG", "file")
+    if kind == "clickhouse":
+        return _clickhouse_catalog()
+    if kind != "file":
+        raise ToolError(f"ICEGUARD_CATALOG must be 'file' or 'clickhouse', not {kind!r}.")
+
     schema = Path(os.environ.get("ICEGUARD_SCHEMA", REPO_ROOT / "catalog" / "schema.toml"))
     if not schema.is_file():
         raise ToolError(f"Catalog schema file not found: {schema}")
     return SchemaFileCatalog(schema, repo_root=schema.parent.parent)
+
+
+def _clickhouse_catalog() -> CatalogSource:
+    from clickhouse_connect.driver.exceptions import OperationalError
+
+    from iceguard.clickhouse_catalog import ClickHouseCatalog
+
+    host = os.environ.get("ICEGUARD_CH_HOST", "127.0.0.1")
+    port = int(os.environ.get("ICEGUARD_CH_PORT", "8123"))
+    try:
+        return ClickHouseCatalog(REPO_ROOT, host=host, port=port)
+    except OperationalError as e:
+        raise ToolError(
+            f"Cannot reach ClickHouse at {host}:{port}. Start it with scripts/clickhouse.sh start."
+        ) from e
 
 
 @mcp.tool(annotations=READ_ONLY)
