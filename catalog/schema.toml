@@ -1,0 +1,90 @@
+# Hand-written catalog for Steps 1-4. Step 5 replaces it with discovery from
+# ClickHouse; the tests keep using it as a fast fixture.
+#
+# Source tables (raw.*) have no produced_by: nothing in this repo writes them.
+# unique_key is a declared contract; ClickHouse does not enforce uniqueness.
+
+# --- Source tables -----------------------------------------------------------
+
+[tables."raw.deliveries"]
+description = "One row per delivery attempt, as emitted by the dispatch service."
+order_by = ["promised_time", "delivery_id"]
+unique_key = ["delivery_id"]
+[tables."raw.deliveries".columns]
+delivery_id = "UInt64"
+merchant_id = "UInt32"
+dasher_id = "UInt32"
+zone_id = "UInt16"
+status = "String"
+promised_time = "DateTime"
+actual_time = "DateTime"
+order_value = "Decimal(10, 2)"
+
+[tables."raw.weather_hourly"]
+description = "Observed weather per delivery zone per hour."
+order_by = ["zone_id", "hour"]
+unique_key = ["zone_id", "hour"]
+[tables."raw.weather_hourly".columns]
+zone_id = "UInt16"
+hour = "DateTime"
+weather_condition = "String"
+precipitation_mm = "Float32"
+
+[tables."raw.merchants"]
+description = "Current merchant attributes."
+order_by = ["merchant_id"]
+unique_key = ["merchant_id"]
+[tables."raw.merchants".columns]
+merchant_id = "UInt32"
+merchant_name = "String"
+zone_id = "UInt16"
+cuisine = "String"
+
+[tables."raw.promo_clicks"]
+description = "One row per promotion click."
+order_by = ["clicked_at", "click_id"]
+unique_key = ["click_id"]
+[tables."raw.promo_clicks".columns]
+click_id = "UInt64"
+promo_id = "UInt32"
+user_id = "UInt64"
+clicked_at = "DateTime"
+
+# --- Existing analytics tables -------------------------------------------------
+
+[tables."analytics.fact_deliveries"]
+description = "Completed deliveries with delay in minutes. One row per delivered order."
+order_by = ["delivery_date", "delivery_id"]
+partition_by = "toYYYYMM(delivery_date)"
+unique_key = ["delivery_id"]
+produced_by = "pipelines/existing/fact_deliveries.sql"
+[tables."analytics.fact_deliveries".columns]
+delivery_id = "UInt64"
+merchant_id = "UInt32"
+dasher_id = "UInt32"
+zone_id = "UInt16"
+delivery_date = "Date"
+delay_minutes = "Int64"
+status = "String"
+
+[tables."analytics.agg_merchant_daily_delays"]
+description = "Average delivery delay per merchant per day."
+order_by = ["delivery_date", "merchant_id"]
+partition_by = "toYYYYMM(delivery_date)"
+unique_key = ["merchant_id", "delivery_date"]
+produced_by = "pipelines/existing/agg_merchant_daily_delays.sql"
+[tables."analytics.agg_merchant_daily_delays".columns]
+merchant_id = "UInt32"
+delivery_date = "Date"
+deliveries = "UInt64"
+avg_delay_minutes = "Float64"
+
+[tables."analytics.zombie_promo_clicks_2024"]
+description = "Daily clicks per 2024 promotion. Still written nightly; nothing reads it (Milestone 2 case)."
+order_by = ["click_date", "promo_id"]
+unique_key = ["promo_id", "click_date"]
+produced_by = "pipelines/existing/zombie_promo_clicks_2024.sql"
+[tables."analytics.zombie_promo_clicks_2024".columns]
+promo_id = "UInt32"
+click_date = "Date"
+clicks = "UInt64"
