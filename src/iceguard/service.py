@@ -64,6 +64,11 @@ def plan_table_reuse(
     expanded_existing = {t: expand_upstream(a, existing) for t, a in existing.items()}
     expanded_proposed = expand_upstream(proposed, existing)
     limitations = expanded_proposed.limitations + errors
+    limitations += [
+        f"Joins {j.table}, which keeps only current values, not values at event time."
+        for j in expanded_proposed.joins
+        if j.current_state
+    ]
 
     assessments = []
     for candidate in find_candidates(proposed, expanded_proposed, expanded_existing):

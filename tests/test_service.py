@@ -97,3 +97,19 @@ def test_in_filter_reuses_fact_deliveries(catalog: SchemaFileCatalog) -> None:
     )
     assert plan.decision == Decision.REUSE
     assert plan.recommended_table == "analytics.fact_deliveries"
+
+
+def test_join_to_current_state_table_needs_confirmation(catalog: SchemaFileCatalog) -> None:
+    """raw.merchants keeps only today's cuisine; past deliveries would get today's value."""
+    plan = plan_table_reuse(
+        "SELECT d.delivery_id, m.cuisine, "
+        "dateDiff('minute', d.promised_time, d.actual_time) AS delay_minutes "
+        "FROM raw.deliveries AS d "
+        "LEFT JOIN raw.merchants AS m ON m.merchant_id = d.merchant_id "
+        "WHERE d.status = 'DELIVERED'",
+        catalog,
+    )
+    assert plan.decision == Decision.NEEDS_INFO
+    assert any("raw.merchants" in limitation for limitation in plan.limitations)
+    logic = next(c for c in plan.assessments[0].checks if c.name == "logic")
+    assert "keeps only current values" in logic.reasons[0]

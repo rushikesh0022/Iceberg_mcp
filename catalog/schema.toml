@@ -3,6 +3,7 @@
 #
 # Source tables (raw.*) have no produced_by: nothing in this repo writes them.
 # unique_key is a declared contract; ClickHouse does not enforce uniqueness.
+# current_state = true marks tables that keep only today's values.
 
 # --- Source tables -----------------------------------------------------------
 
@@ -34,6 +35,7 @@ precipitation_mm = "Float32"
 description = "Current merchant attributes."
 order_by = ["merchant_id"]
 unique_key = ["merchant_id"]
+current_state = true  # rows are overwritten: today's cuisine, not the cuisine at order time
 [tables."raw.merchants".columns]
 merchant_id = "UInt32"
 merchant_name = "String"

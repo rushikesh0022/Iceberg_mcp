@@ -51,7 +51,7 @@ def analysis_key(sql: str, catalog: CatalogSource) -> str:
     facts = [
         sql,
         catalog.schema_mapping(),
-        {t.name: t.unique_key for t in catalog.list_tables()},
+        {t.name: [t.unique_key, t.current_state] for t in catalog.list_tables()},
         _CODE_VERSION,
     ]
     return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
@@ -106,7 +106,9 @@ def analyze_sql(sql: str, catalog: CatalogSource) -> SqlAnalysis:
         [normalize.sql(p) for p in _conjuncts(select.args.get("where"))]
         + [f"HAVING {normalize.sql(p)}" for p in _conjuncts(select.args.get("having"))]
     )
-    joins = [_join(j, normalize, aliases, limitations) for j in select.args.get("joins") or []]
+    joins = [
+        _join(j, normalize, aliases, catalog, limitations) for j in select.args.get("joins") or []
+    ]
     group = select.args.get("group")
     group_by = [normalize.sql(e) for e in group.expressions] if group else []
 
@@ -235,7 +237,11 @@ def _conjuncts(clause: exp.Expression | None) -> list[exp.Expression]:
 
 
 def _join(
-    join: exp.Join, normalize: _Normalizer, aliases: dict[str, str], limitations: list[str]
+    join: exp.Join,
+    normalize: _Normalizer,
+    aliases: dict[str, str],
+    catalog: CatalogSource,
+    limitations: list[str],
 ) -> Join:
     alias = join.this.alias_or_name
     table = aliases.get(alias, alias)
@@ -246,6 +252,7 @@ def _join(
         kind=" ".join(p for p in (join.side, join.kind) if p) or "INNER",
         table=table,
         condition=normalize.sql(on) if on else "",
+        current_state=bool((t := catalog.get_table(table)) and t.current_state),
     )
 
 

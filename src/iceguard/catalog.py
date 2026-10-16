@@ -70,5 +70,6 @@ def _parse_table(name: str, data: dict) -> Table:
         order_by=data.get("order_by", []),
         partition_by=data.get("partition_by"),
         unique_key=data.get("unique_key", []),
+        current_state=data.get("current_state", False),
         produced_by=data.get("produced_by"),
     )

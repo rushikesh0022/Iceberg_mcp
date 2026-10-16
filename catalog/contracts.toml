@@ -3,6 +3,9 @@
 # ClickHouse knows each table's columns, sort key and partitions, but not which
 # columns identify one row (ORDER BY is not a uniqueness guarantee). IceGuard
 # needs that to know a table's grain, so it is declared here.
+#
+# current_state = true: the table keeps only today's values. Joining it to past
+# events gives today's value, so IceGuard asks before recommending it.
 
 [tables."raw.deliveries"]
 unique_key = ["delivery_id"]
@@ -12,6 +15,7 @@ unique_key = ["zone_id", "hour"]
 
 [tables."raw.merchants"]
 unique_key = ["merchant_id"]
+current_state = true  # rows are overwritten: today's cuisine, not the cuisine at order time
 
 [tables."raw.promo_clicks"]
 unique_key = ["click_id"]

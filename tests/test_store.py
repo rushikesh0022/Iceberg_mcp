@@ -29,6 +29,12 @@ def test_cache_key_changes_with_sql_and_catalog(catalog: SchemaFileCatalog, tmp_
     assert analysis_key(SQL + "\n", catalog) != key
     assert analysis_key(SQL, other) != key
 
+    flagged_schema = tmp_path / "flagged" / "catalog" / "schema.toml"
+    flagged_schema.parent.mkdir(parents=True)
+    flagged_schema.write_text(text.replace("current_state = true", "current_state = false"))
+    flagged = SchemaFileCatalog(flagged_schema, repo_root=REPO_ROOT)
+    assert analysis_key(SQL, flagged) != key
+
 
 def test_cache_does_not_change_decisions(tmp_path: Path, catalog: SchemaFileCatalog) -> None:
     store = Store(tmp_path / "s.sqlite")

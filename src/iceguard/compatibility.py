@@ -163,8 +163,15 @@ def check_logic(proposed: SqlAnalysis, existing: SqlAnalysis) -> CheckResult:
 
     existing_joins = {(j.kind, j.table, j.condition) for j in existing.joins}
     proposed_joins = {(j.kind, j.table, j.condition) for j in proposed.joins}
+    current_state = {j.table for j in proposed.joins if j.current_state}
     for kind, table, _ in sorted(proposed_joins - existing_joins):
-        if kind != "LEFT":
+        if kind == "LEFT" and proposed.grain and not proposed.group_by and table in current_state:
+            statuses.append(CheckStatus.UNKNOWN)
+            reasons.append(
+                f"{table} keeps only current values: past rows would get today's values, "
+                "not the values when they happened. Confirm that current values are intended."
+            )
+        elif kind != "LEFT":
             statuses.append(CheckStatus.FAIL)
             reasons.append(f"{kind} JOIN {table} drops rows without a match.")
         elif proposed.group_by:

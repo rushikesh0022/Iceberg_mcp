@@ -25,6 +25,9 @@ class Table(BaseModel):
     # Columns declared to identify one row. ClickHouse does not enforce this,
     # so it comes from the schema file or a contract, not from the engine.
     unique_key: list[str] = Field(default_factory=list)
+    # True when the table keeps only today's values (rows are overwritten). Joined
+    # to past events, it gives today's value, not the value when the event happened.
+    current_state: bool = False
     produced_by: str | None = None  # path to the SQL file, relative to the repo root
     # Reported by the database; None when the catalog is a hand-written file.
     engine: str | None = None
@@ -50,6 +53,7 @@ class Join(BaseModel):
     kind: str  # e.g. "LEFT", "INNER"
     table: str
     condition: str  # normalized SQL
+    current_state: bool = False  # the joined table keeps only today's values
 
 
 class SqlAnalysis(BaseModel):

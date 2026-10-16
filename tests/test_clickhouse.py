@@ -59,6 +59,7 @@ def test_discovered_layout_contracts_and_producers(ch_catalog, catalog: SchemaFi
         assert found.order_by == expected.order_by, expected.name
         assert found.partition_by == expected.partition_by, expected.name
         assert found.unique_key == expected.unique_key, expected.name
+        assert found.current_state == expected.current_state, expected.name
         assert found.produced_by == expected.produced_by, expected.name
         assert found.description == expected.description, expected.name
         assert found.total_rows and found.total_rows > 0, expected.name

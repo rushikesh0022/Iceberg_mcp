@@ -4,7 +4,7 @@
   description (COMMENT), rows, bytes          <- system.tables
   columns and types                           <- system.columns
   which SQL file creates each table           <- target of each pipelines/existing/*.sql
-  unique key (grain)                          <- catalog/contracts.toml (ClickHouse cannot know it)
+  unique key (grain), current-state flag     <- catalog/contracts.toml (ClickHouse cannot know them)
 
 The catalog is a snapshot taken when the object is created.
 """
@@ -74,7 +74,8 @@ class ClickHouseCatalog:
                     description=comment,
                     order_by=split_key(sorting_key),
                     partition_by=partition_key or None,
-                    unique_key=contracts.get(qualified, []),
+                    unique_key=contracts.get(qualified, {}).get("unique_key", []),
+                    current_state=contracts.get(qualified, {}).get("current_state", False),
                     produced_by=producers.get(qualified),
                     engine=engine,
                     total_rows=rows,
@@ -117,12 +118,11 @@ def split_key(key: str) -> list[str]:
     return [*parts, tail] if tail else parts
 
 
-def _load_contracts(path: Path) -> dict[str, list[str]]:
+def _load_contracts(path: Path) -> dict[str, dict]:
     if not path.is_file():
         return {}
     with path.open("rb") as f:
-        tables = tomllib.load(f).get("tables", {})
-    return {name: data.get("unique_key", []) for name, data in tables.items()}
+        return tomllib.load(f).get("tables", {})
 
 
 def _find_producers(pipelines_dir: Path, repo_root: Path) -> dict[str, str]:
