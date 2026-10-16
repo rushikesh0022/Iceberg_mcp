@@ -1,8 +1,4 @@
-"""The Milestone 1 acceptance tests: each planted proposal gets the right answer.
-
-They are expected to fail with NotImplementedError until Step 3. `strict=True`
-makes pytest report it the moment one starts passing, so the marker gets removed.
-"""
+"""The Milestone 1 acceptance tests: each planted proposal gets the right answer."""
 
 import pytest
 
@@ -25,7 +21,6 @@ CASES = [
 ]
 
 
-@pytest.mark.xfail(raises=NotImplementedError, strict=True, reason="Step 3")
 @pytest.mark.parametrize(("filename", "decision", "table", "new_columns"), CASES)
 def test_planted_case(
     catalog: SchemaFileCatalog,
@@ -41,3 +36,17 @@ def test_planted_case(
     if new_columns:
         best = next(a for a in plan.assessments if a.candidate.table == table)
         assert best.new_columns == new_columns
+
+
+def test_missing_filter_reason_names_the_filter(catalog: SchemaFileCatalog) -> None:
+    plan = plan_table_reuse((PROPOSED_DIR / "02_missing_filter.sql").read_text(), catalog)
+    fact = next(a for a in plan.assessments if a.candidate.table == "analytics.fact_deliveries")
+    logic = next(c for c in fact.checks if c.name == "logic")
+    assert any("'DELIVERED' = raw.deliveries.status" in r for r in logic.reasons)
+
+
+def test_different_grain_reports_aggregation_option(catalog: SchemaFileCatalog) -> None:
+    plan = plan_table_reuse((PROPOSED_DIR / "03_different_grain.sql").read_text(), catalog)
+    fact = next(a for a in plan.assessments if a.candidate.table == "analytics.fact_deliveries")
+    grain = next(c for c in fact.checks if c.name == "grain")
+    assert "Can be built from analytics.fact_deliveries by aggregation." in grain.reasons

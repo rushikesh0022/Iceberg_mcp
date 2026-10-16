@@ -150,19 +150,21 @@ class _Normalizer:
                 return exp.column(n.name, table=table, db=db or None)
             return n
 
-        def order_eq(n: exp.Expression) -> exp.Expression:
-            if isinstance(n, exp.EQ) and n.this.sql(DIALECT) > n.expression.sql(DIALECT):
-                return exp.EQ(this=n.expression, expression=n.this)
-            return n
-
         # Two passes: operands must be unaliased before their order is compared.
-        return node.copy().transform(unalias).transform(order_eq)
+        return node.copy().transform(unalias).transform(_order_eq)
 
     def sql(self, node: exp.Expression) -> str:
         return self.rewrite(node).sql(DIALECT)
 
     def source_columns(self, node: exp.Expression) -> list[str]:
         return sorted({c.sql(DIALECT) for c in self.rewrite(node).find_all(exp.Column)})
+
+
+def _order_eq(n: exp.Expression) -> exp.Expression:
+    """Write `a = b` with operands in a fixed order, so `x = 1` and `1 = x` match."""
+    if isinstance(n, exp.EQ) and n.this.sql(DIALECT) > n.expression.sql(DIALECT):
+        return exp.EQ(this=n.expression, expression=n.this)
+    return n
 
 
 def _conjuncts(clause: exp.Expression | None) -> list[exp.Expression]:
@@ -269,3 +271,128 @@ def _is_many_to_one(join: exp.Join, joined: str | None, catalog: CatalogSource) 
             if isinstance(side, exp.Column) and side.table == alias and alias not in other_refs:
                 pinned.add(side.name)
     return set(table.unique_key) <= pinned
+
+
+# --- Whole catalog and upstream expansion --------------------------------------
+
+
+def analyze_catalog(catalog: CatalogSource) -> tuple[dict[str, SqlAnalysis], list[str]]:
+    """Analyse the SQL of every produced table. Return analyses by table, and errors."""
+    analyses: dict[str, SqlAnalysis] = {}
+    errors: list[str] = []
+    for table in catalog.list_tables():
+        sql = catalog.read_sql(table)
+        if sql is None:
+            continue
+        try:
+            analyses[table.name] = analyze_sql(sql, catalog)
+        except SqlAnalysisError as e:
+            errors.append(f"{table.name}: {e}")
+    return analyses, errors
+
+
+def expand_upstream(
+    analysis: SqlAnalysis, upstream: dict[str, SqlAnalysis], max_depth: int = 5
+) -> SqlAnalysis:
+    """Rewrite `analysis` in terms of the tables its simple upstream tables read.
+
+    A query that reads analytics.fact_deliveries.delay_minutes becomes a query
+    that reads DATE_DIFF(...raw.deliveries...), and it inherits the upstream
+    filter. Two queries written at different levels can then be compared.
+
+    Only "simple" upstream tables are inlined: projection and filter, with no
+    GROUP BY and no joins. Inlining an aggregate would change the grain, so
+    aggregated tables stay as sources. Joined tables are never inlined, because
+    their filters would not apply to the driving rows.
+    """
+    joined = {j.table for j in analysis.joins}
+    inline: dict[str, SqlAnalysis] = {}
+    if max_depth > 0:
+        for source in analysis.source_tables:
+            up = upstream.get(source)
+            if source not in joined and up is not None and _is_simple(up):
+                inline[source] = expand_upstream(up, upstream, max_depth - 1)
+
+    limitations = list(analysis.limitations)
+
+    def substitute(sql: str) -> exp.Expression:
+        def visit(n: exp.Expression) -> exp.Expression:
+            if not isinstance(n, exp.Column):
+                return n
+            table = f"{n.db}.{n.table}" if n.db else n.table
+            if table not in inline:
+                return n
+            replacement = next((o for o in inline[table].outputs if o.name == n.name), None)
+            if replacement is None:
+                limitations.append(f"{table} has no output column {n.name}.")
+                return n
+            return sqlglot.parse_one(replacement.expression, read=DIALECT)
+
+        node = sqlglot.parse_one(sql, read=DIALECT)
+        return node.transform(visit).transform(_order_eq)
+
+    def rewrite(sql: str) -> str:
+        if sql.startswith("HAVING "):
+            return "HAVING " + substitute(sql.removeprefix("HAVING ")).sql(DIALECT)
+        return substitute(sql).sql(DIALECT)
+
+    outputs = []
+    for o in analysis.outputs:
+        node = substitute(o.expression)
+        columns = sorted({c.sql(DIALECT) for c in node.find_all(exp.Column)})
+        outputs.append(
+            OutputColumn(name=o.name, expression=node.sql(DIALECT), source_columns=columns)
+        )
+
+    filters = {rewrite(f) for f in analysis.filters}
+    for up in inline.values():
+        filters.update(up.filters)
+
+    sources = set(analysis.source_tables) - set(inline)
+    for up in inline.values():
+        sources.update(up.source_tables)
+
+    return analysis.model_copy(
+        update={
+            "source_tables": sorted(sources),
+            "outputs": outputs,
+            "filters": sorted(filters),
+            "joins": [
+                j.model_copy(update={"condition": rewrite(j.condition) if j.condition else ""})
+                for j in analysis.joins
+            ],
+            "group_by": [rewrite(g) for g in analysis.group_by],
+            "limitations": limitations,
+        }
+    )
+
+
+def identity_analysis(table: str, analysis: SqlAnalysis) -> SqlAnalysis:
+    """Describe an existing table as `SELECT <its columns> FROM <it>`.
+
+    Used to compare a proposal that reads an aggregated table directly, which
+    expand_upstream() does not inline.
+    """
+    return SqlAnalysis(
+        target_table=table,
+        source_tables=[table],
+        outputs=[
+            OutputColumn(
+                name=o.name, expression=f"{table}.{o.name}", source_columns=[f"{table}.{o.name}"]
+            )
+            for o in analysis.outputs
+        ],
+        filters=[],
+        joins=[],
+        group_by=[],
+        grain=analysis.grain,
+    )
+
+
+def _is_simple(analysis: SqlAnalysis) -> bool:
+    return (
+        bool(analysis.grain)
+        and not analysis.group_by
+        and not analysis.joins
+        and not analysis.limitations
+    )
